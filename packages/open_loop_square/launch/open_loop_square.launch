@@ -1,0 +1,3 @@
+<launch>
+    <node name="drive_square_node" pkg="open_loop_square" type="open_loop_square.py" output="screen"/>
+</launch>

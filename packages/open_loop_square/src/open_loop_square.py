@@ -1,58 +1,101 @@
 #!/usr/bin/env python3
 
 import rospy
-import time
 from duckietown_msgs.msg import Twist2DStamped
+from duckietown_msgs.msg import FSMState
 
-class SquareNode:
+
+class DriveSquare:
 
     def __init__(self):
-        self.node_name = "open_loop_square_node"
-        rospy.init_node(self.node_name)
+        # message object
+        self.cmd_msg = Twist2DStamped()
+        self.is_moving = False
 
-        self.robot_name = rospy.get_namespace().strip("/")
-        topic = f"/{self.robot_name}/car_cmd_switch_node/cmd"
+        # initialize node
+        rospy.init_node('drive_square_node', anonymous=True)
 
-        self.pub = rospy.Publisher(topic, Twist2DStamped, queue_size=1)
-        rospy.sleep(2)
+        # CHANGE robot name if different
+        self.robot_name = "mybota002822"
 
-    def stop(self):
-        msg = Twist2DStamped()
-        msg.v = 0.0
-        msg.omega = 0.0
-        self.pub.publish(msg)
-        rospy.sleep(1)
+        # publisher
+        self.pub = rospy.Publisher(
+            f"/{self.robot_name}/car_cmd_switch_node/cmd",
+            Twist2DStamped,
+            queue_size=1
+        )
 
-    def move(self, v, omega, duration):
-        msg = Twist2DStamped()
-        msg.v = v
-        msg.omega = omega
+        # subscriber
+        rospy.Subscriber(
+            f"/{self.robot_name}/fsm_node/mode",
+            FSMState,
+            self.fsm_callback,
+            queue_size=1
+        )
 
-        start = time.time()
+    def fsm_callback(self, msg):
+        rospy.loginfo("State: %s", msg.state)
 
-        while time.time() - start < duration and not rospy.is_shutdown():
-            self.pub.publish(msg)
-            rospy.sleep(0.1)
+        if msg.state == "NORMAL_JOYSTICK_CONTROL":
+            self.stop_robot()
+            self.is_moving = False
 
-        self.stop()
+        elif msg.state == "LANE_FOLLOWING":
+            if not self.is_moving:
+                self.is_moving = True
+                rospy.sleep(1)
+                self.move_robot()
+                self.is_moving = False
 
-    def run(self):
-        forward_time = 3.3
-        turn_time = 1.25
+    def stop_robot(self):
+        self.cmd_msg.header.stamp = rospy.Time.now()
+        self.cmd_msg.v = 0.0
+        self.cmd_msg.omega = 0.0
+        self.pub.publish(self.cmd_msg)
+
+    def move_robot(self):
+
+        # you can adjust these values
+        forward_speed = 0.4
+        forward_time = 3.0   # increase/decrease for 1 meter
+
+        turn_speed = 3.0
+        turn_time = 1.2      # adjust for 90 degree
 
         for i in range(4):
-            rospy.loginfo(f"Side {i+1}")
 
-            # Move forward
-            self.move(0.3, 0.0, forward_time)
+            rospy.loginfo("Moving forward")
 
-            # Turn
-            self.move(0.0, 2.5, turn_time)
+            self.cmd_msg.header.stamp = rospy.Time.now()
+            self.cmd_msg.v = forward_speed
+            self.cmd_msg.omega = 0.0
+            self.pub.publish(self.cmd_msg)
+            rospy.sleep(forward_time)
 
-        self.stop()
-        rospy.loginfo("Square Completed")
+            self.stop_robot()
+            rospy.sleep(0.5)
+
+            rospy.loginfo("Turning")
+
+            self.cmd_msg.header.stamp = rospy.Time.now()
+            self.cmd_msg.v = 0.0
+            self.cmd_msg.omega = turn_speed
+            self.pub.publish(self.cmd_msg)
+            rospy.sleep(turn_time)
+
+            self.stop_robot()
+            rospy.sleep(0.5)
+
+        self.stop_robot()
+        rospy.loginfo("Square completed")
+
+    def run(self):
+        rospy.spin()
 
 
-if __name__ == "__main__":
-    node = SquareNode()
-    node.run()
+if __name__ == '__main__':
+    try:
+        node = DriveSquare()
+        node.run()
+    except rospy.ROSInterruptException:
+        pass
