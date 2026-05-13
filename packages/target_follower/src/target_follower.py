@@ -12,7 +12,7 @@ class TargetFollower:
         rospy.on_shutdown(self.clean_shutdown)
 
         # Robot name
-        self.robot_name = "mybota002822"
+        self.robot_name = "mybota002443"
 
         # Publisher for robot movement
         self.cmd_vel_pub = rospy.Publisher(
