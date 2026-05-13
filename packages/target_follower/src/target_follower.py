@@ -7,23 +7,21 @@ from duckietown_msgs.msg import AprilTagDetectionArray
 
 class TargetFollower:
     def __init__(self):
-        # Start ROS node
         rospy.init_node("target_follower_node", anonymous=True)
 
-        # Stop robot safely when program closes
         rospy.on_shutdown(self.clean_shutdown)
 
-        # Your Duckiebot name
-        self.robot_name = "mybota002443"
+        # Robot name
+        self.robot_name = "mybota002822"
 
-        # Publisher: sends movement command to robot
+        # Publisher for robot movement
         self.cmd_vel_pub = rospy.Publisher(
             "/" + self.robot_name + "/car_cmd_switch_node/cmd",
             Twist2DStamped,
             queue_size=1
         )
 
-        # Subscriber: receives AprilTag detection data
+        # Subscriber for AprilTag detection
         rospy.Subscriber(
             "/" + self.robot_name + "/apriltag_detector_node/detections",
             AprilTagDetectionArray,
@@ -31,52 +29,66 @@ class TargetFollower:
             queue_size=1
         )
 
-        # Control values
-        self.seek_speed = 2.0          # speed for searching when no tag is found
-        self.turn_gain = 3.0           # how strongly robot turns towards tag
-        self.dead_zone = 0.05          # small centre area where robot stops turning
-        self.max_turn_speed = 3.5      # maximum turning speed
+        # Target following values
+        self.target_distance = 0.35      # robot will try to keep this distance from tag
+        self.distance_dead_zone = 0.05   # no forward/backward movement inside this range
 
-        rospy.loginfo("Target follower node started for robot: %s", self.robot_name)
+        # Linear movement values
+        self.linear_gain = 0.6
+        self.max_linear_speed = 0.25
+        self.min_linear_speed = 0.08
 
-        # Keep node running
+        # Rotation values
+        self.turn_gain = 3.0
+        self.center_dead_zone = 0.04
+        self.max_turn_speed = 3.0
+        self.min_turn_speed = 0.4
+
+        rospy.loginfo("SIT310 5.2C Target Following node started")
+        rospy.loginfo("Robot name: %s", self.robot_name)
+
         rospy.spin()
 
     def tag_callback(self, msg):
-        # This function runs whenever AprilTag data is received
         self.move_robot(msg.detections)
 
     def clean_shutdown(self):
-        # Stop robot before shutting down
-        rospy.loginfo("System shutting down. Stopping robot...")
+        rospy.loginfo("Shutting down. Stopping robot...")
         self.stop_robot()
 
     def stop_robot(self):
-        # Send zero speed to stop robot
-        cmd_msg = Twist2DStamped()
-        cmd_msg.header.stamp = rospy.Time.now()
-        cmd_msg.v = 0.0
-        cmd_msg.omega = 0.0
-        self.cmd_vel_pub.publish(cmd_msg)
+        self.send_command(0.0, 0.0)
 
     def send_command(self, linear_speed, angular_speed):
-        # Send movement command to robot
         cmd_msg = Twist2DStamped()
         cmd_msg.header.stamp = rospy.Time.now()
         cmd_msg.v = linear_speed
         cmd_msg.omega = angular_speed
         self.cmd_vel_pub.publish(cmd_msg)
 
+    def limit_value(self, value, max_value):
+        if value > max_value:
+            return max_value
+        if value < -max_value:
+            return -max_value
+        return value
+
+    def add_minimum_speed(self, value, min_value):
+        if value > 0 and value < min_value:
+            return min_value
+        if value < 0 and value > -min_value:
+            return -min_value
+        return value
+
     def move_robot(self, detections):
-        # Feature 1: Seek object
-        # If no AprilTag is visible, robot rotates slowly and searches.
+        # In Task 5.2C, seek behaviour is not needed.
+        # If no tag is detected, robot should stay stationary.
         if len(detections) == 0:
-            rospy.loginfo("No tag found. Searching...")
-            self.send_command(0.0, self.seek_speed)
+            rospy.loginfo("No AprilTag detected. Robot stopped.")
+            self.stop_robot()
             return
 
-        # Feature 2: Look at object
-        # Use first detected AprilTag.
+        # Use first detected AprilTag
         tag = detections[0]
 
         x = tag.transform.translation.x
@@ -86,28 +98,38 @@ class TargetFollower:
 
         rospy.loginfo("Tag ID: %d | x: %.3f y: %.3f z: %.3f", tag_id, x, y, z)
 
-        # x tells if tag is left or right from camera centre
-        error = x
+        # -----------------------------
+        # 1. Rotation control
+        # -----------------------------
+        # x value tells if tag is left or right.
+        # Robot rotates to keep the tag in the centre.
+        turn_error = x
 
-        # If tag is almost in centre, stop rotating
-        if abs(error) < self.dead_zone:
-            rospy.loginfo("Tag is near centre. Stopping rotation.")
-            self.send_command(0.0, 0.0)
-            return
+        if abs(turn_error) < self.center_dead_zone:
+            omega = 0.0
+        else:
+            omega = -self.turn_gain * turn_error
+            omega = self.limit_value(omega, self.max_turn_speed)
+            omega = self.add_minimum_speed(omega, self.min_turn_speed)
 
-        # P control: more error means more turning
-        omega = -self.turn_gain * error
+        # -----------------------------
+        # 2. Distance control
+        # -----------------------------
+        # z value gives distance from camera to tag.
+        # If z is bigger than target distance, robot moves forward.
+        # If z is smaller than target distance, robot moves backward slowly.
+        distance_error = z - self.target_distance
 
-        # Limit angular speed
-        if omega > self.max_turn_speed:
-            omega = self.max_turn_speed
-        elif omega < -self.max_turn_speed:
-            omega = -self.max_turn_speed
+        if abs(distance_error) < self.distance_dead_zone:
+            v = 0.0
+        else:
+            v = self.linear_gain * distance_error
+            v = self.limit_value(v, self.max_linear_speed)
+            v = self.add_minimum_speed(v, self.min_linear_speed)
 
-        rospy.loginfo("Looking at tag. omega: %.3f", omega)
+        rospy.loginfo("Command | v: %.3f omega: %.3f", v, omega)
 
-        # v = 0 because task only needs in-place rotation
-        self.send_command(0.0, omega)
+        self.send_command(v, omega)
 
 
 if __name__ == "__main__":
